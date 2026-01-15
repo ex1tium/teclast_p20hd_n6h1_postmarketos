@@ -165,7 +165,8 @@ sudo apt install -y --no-install-recommends \
   abootimg \
   binwalk \
   cpio gzip bzip2 lz4 xz-utils \
-  unzip zip
+  unzip zip \
+  fuse2fs
 
 echo "[5/7] Installing cross compilation tools..."
 sudo apt install -y --no-install-recommends \

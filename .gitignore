@@ -15,7 +15,7 @@
 /backup/
 /extracted/
 /device-info/
-/reports/
+#/reports/
 /logs/
 /work/
 /out/

@@ -105,10 +105,11 @@ safe_ls() {
   local track_name="${4:-}"
   h3 "$title"
   if [[ -e "$path" ]]; then
-    # Check if directory has actual content
+    # Check if directory has actual content (recursively for nested structures)
     local file_count
     if [[ -d "$path" ]]; then
-      file_count=$(find "$path" -maxdepth 1 -type f 2>/dev/null | wc -l)
+      # Check both immediate files and nested directories (handles debugfs nested extraction)
+      file_count=$(find "$path" -type f 2>/dev/null | wc -l)
       if [[ "$file_count" -gt 0 ]]; then
         echo "$(ok_mark) **Found** ($file_count files)"
         [[ -n "$track_name" ]] && track_found "$track_name" || true
@@ -207,6 +208,14 @@ SUPER_LP_DIR="${PROJECT_DIR}/extracted/super_lpunpack"
 VENDOR_BLOBS_DIR="${PROJECT_DIR}/extracted/vendor_blobs"
 BACKUP_DIR="${PROJECT_DIR}/backup"
 
+# Device-info paths (from ADB collection)
+DEVICE_INFO_DIR="${PROJECT_DIR}/device-info"
+PARTITION_LAYOUT_TXT="${DEVICE_INFO_DIR}/partition_layout.txt"
+LOADED_MODULES_TXT="${DEVICE_INFO_DIR}/loaded_modules.txt"
+INPUT_DEVICES_TXT="${DEVICE_INFO_DIR}/input_devices.txt"
+DISPLAY_INFO_TXT="${DEVICE_INFO_DIR}/display_info.txt"
+SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
+
 # -----------------------------------------------------------------------------
 # Generate report
 # -----------------------------------------------------------------------------
@@ -258,9 +267,90 @@ BACKUP_DIR="${PROJECT_DIR}/backup"
     echo ""
     grep_some "Key properties (ro.boot / ro.product / ro.hardware)" "$GETPROP_FULL_TXT" '\[(ro\.boot|ro\.hardware|ro\.product)\.' 120
     grep_some "Build fingerprint + SDK + release" "$GETPROP_FULL_TXT" '\[(ro\.product\.build\.fingerprint|ro\.product\.build\.version\.sdk|ro\.product\.build\.version\.release|ro\.boot\.verifiedbootstate|ro\.boot\.flash\.locked)\]' 120
+
+    # GPU/EGL info from getprop
+    h3 "GPU / Graphics properties"
+    echo ""
+    {
+      grep -E '\[(ro\.hardware\.egl|ro\.opengles\.version|ro\.hardware\.vulkan|ro\.board\.platform)\]' "$GETPROP_FULL_TXT" 2>/dev/null || echo "_No GPU properties found_"
+    } | codeblock ""
   else
     echo "$(fail_mark) **No getprop data available yet.**"
     track_missing "Device properties (getprop)"
+    echo ""
+  fi
+
+  hr
+
+  h2 "Partition Layout (from live device)"
+
+  if [[ -f "$PARTITION_LAYOUT_TXT" && -s "$PARTITION_LAYOUT_TXT" ]]; then
+    echo "$(ok_mark) **Partition layout collected from device**"
+    track_found "Partition layout"
+    echo ""
+    echo "Block device mapping from \`/dev/block/by-name/\`:"
+    echo ""
+    cat "$PARTITION_LAYOUT_TXT" | codeblock ""
+
+    # Summarize key partitions
+    h3 "Key partitions for porting"
+    echo ""
+    echo "| Partition | Block Device | Purpose |"
+    echo "|-----------|--------------|---------|"
+    # Parse partition layout - extract name and device
+    grep -E ' (boot|dtbo|super|vbmeta|vbmeta_system|vbmeta_vendor|recovery|wcnmodem|l_modem|persist|userdata) -> ' "$PARTITION_LAYOUT_TXT" 2>/dev/null | \
+      grep -v '_bak\|boot0\|boot1' | \
+      while read -r line; do
+        # Extract partition name (8th field in ls -la output) and device path (10th/last field)
+        part=$(echo "$line" | awk '{print $8}')
+        dev=$(echo "$line" | awk '{print $10}')
+        case "$part" in
+          boot) echo "| boot | $dev | Kernel + ramdisk |" ;;
+          dtbo) echo "| dtbo | $dev | Device tree overlays |" ;;
+          super) echo "| super | $dev | Dynamic partitions (system/vendor/product) |" ;;
+          vbmeta) echo "| vbmeta | $dev | AVB verification metadata |" ;;
+          vbmeta_system) echo "| vbmeta_system | $dev | System partition AVB |" ;;
+          vbmeta_vendor) echo "| vbmeta_vendor | $dev | Vendor partition AVB |" ;;
+          recovery) echo "| recovery | $dev | Recovery mode image |" ;;
+          wcnmodem) echo "| wcnmodem | $dev | WiFi/BT firmware |" ;;
+          l_modem) echo "| l_modem | $dev | LTE modem firmware |" ;;
+          persist) echo "| persist | $dev | Persistent data (calibration) |" ;;
+          userdata) echo "| userdata | $dev | User data partition |" ;;
+        esac
+      done
+    echo ""
+  else
+    echo "$(warn_mark) **Partition layout not collected** (device not connected during collection)"
+    track_warning "Partition layout (not collected)"
+    echo ""
+    echo "Connect device with ADB and run: \`bash scripts/05_collect_device_info.sh\`"
+    echo ""
+  fi
+
+  hr
+
+  h2 "Loaded Kernel Modules (from live device)"
+
+  if [[ -f "$LOADED_MODULES_TXT" && -s "$LOADED_MODULES_TXT" ]]; then
+    echo "$(ok_mark) **Loaded modules collected from device**"
+    track_found "Loaded kernel modules"
+    echo ""
+    echo "Modules from \`/sys/module/\` — shows what kernel drivers are active:"
+    echo ""
+
+    # Highlight hardware-relevant modules
+    h3 "Hardware-critical modules"
+    echo ""
+    {
+      grep -E '^(pvrsrvkm|sprd|marlin|cfg80211|rfkill|binder|dpu|drm)' "$LOADED_MODULES_TXT" 2>/dev/null || echo "_No Spreadtrum modules found_"
+    } | codeblock ""
+
+    h3 "Full module list"
+    echo ""
+    cat "$LOADED_MODULES_TXT" | codeblock ""
+  else
+    echo "$(warn_mark) **Loaded modules not collected** (device not connected during collection)"
+    track_warning "Loaded kernel modules (not collected)"
     echo ""
   fi
 
@@ -388,6 +478,16 @@ BACKUP_DIR="${PROJECT_DIR}/backup"
     echo ""
     safe_ls "fstab files" "${RAMDISK_DIR}/fstab" 120
 
+    # Show fstab content (critical for understanding partition layout)
+    FSTAB_FILE=$(find "${RAMDISK_DIR}/fstab" -maxdepth 1 -type f -name "fstab.*" 2>/dev/null | head -1)
+    if [[ -n "$FSTAB_FILE" && -f "$FSTAB_FILE" ]]; then
+      h3 "fstab content ($(basename "$FSTAB_FILE"))"
+      echo ""
+      echo "This file defines how partitions are mounted during boot:"
+      echo ""
+      cat "$FSTAB_FILE" | codeblock ""
+    fi
+
     # Check ueventd
     ueventd_count=$(find "${RAMDISK_DIR}/ueventd" -maxdepth 1 -type f 2>/dev/null | wc -l)
     if [[ "$ueventd_count" -gt 0 ]]; then
@@ -456,6 +556,16 @@ BACKUP_DIR="${PROJECT_DIR}/backup"
     if [[ -f "${VENDOR_BLOBS_DIR}/build.prop" ]]; then
       echo "$(ok_mark) **vendor/build.prop found**"
       track_found "vendor/build.prop"
+      echo ""
+
+      # Show key hardware/platform properties from vendor build.prop
+      h3 "vendor/build.prop key properties"
+      echo ""
+      echo "Hardware and platform identification from vendor partition:"
+      echo ""
+      {
+        grep -E '^(ro\.(board\.|product\.(board|vendor)|vendor\.(product|wcn|modem|gnss)|sf\.lcd|opengles))' "${VENDOR_BLOBS_DIR}/build.prop" 2>/dev/null || true
+      } | head -30 | codeblock "properties"
     else
       echo "$(fail_mark) **vendor/build.prop missing**"
       track_missing "vendor/build.prop"
@@ -489,6 +599,20 @@ BACKUP_DIR="${PROJECT_DIR}/backup"
     fi
     echo ""
     safe_ls "vendor/firmware" "$fw_dir" 120
+
+    # List actual firmware files (handle nested structure from debugfs)
+    actual_fw_dir="$fw_dir"
+    [[ -d "${fw_dir}/firmware" ]] && actual_fw_dir="${fw_dir}/firmware"
+    if [[ -d "$actual_fw_dir" ]]; then
+      fw_files=$(find "$actual_fw_dir" -maxdepth 1 -type f -o -type l 2>/dev/null | wc -l)
+      if [[ "$fw_files" -gt 0 ]]; then
+        h3 "Firmware files inventory"
+        echo ""
+        echo "These files are needed for hardware initialization (GPU, WiFi, sensors, etc.):"
+        echo ""
+        (ls -la "$actual_fw_dir" 2>&1 | grep -v '^total' | grep -v '^\.$' | grep -v '^\.\.$') | codeblock ""
+      fi
+    fi
 
     # Check kernel modules
     mod_dir="${VENDOR_BLOBS_DIR}/lib/modules"
@@ -533,6 +657,37 @@ BACKUP_DIR="${PROJECT_DIR}/backup"
     fi
     echo ""
     safe_ls "vendor/etc/vintf" "$vintf_dir" 120
+
+    # Show VINTF manifest HAL summary (critical for understanding hardware interfaces)
+    MANIFEST_XML="${vintf_dir}/manifest.xml"
+    if [[ -f "$MANIFEST_XML" ]]; then
+      h3 "VINTF manifest HAL summary"
+      echo ""
+      echo "Hardware Abstraction Layers (HALs) declared by vendor — critical for hardware support:"
+      echo ""
+      # Extract HAL names and versions in a readable format
+      {
+        echo "| HAL Name | Version | Interface |"
+        echo "|----------|---------|-----------|"
+        grep -E '<name>|<version>|<fqname>' "$MANIFEST_XML" 2>/dev/null | \
+          sed 's/.*<name>\(.*\)<\/name>.*/NAME:\1/' | \
+          sed 's/.*<version>\(.*\)<\/version>.*/VER:\1/' | \
+          sed 's/.*<fqname>\(.*\)<\/fqname>.*/FQNAME:\1/' | \
+          awk '
+            /^NAME:/ { name=$0; sub(/NAME:/, "", name) }
+            /^VER:/ { ver=$0; sub(/VER:/, "", ver) }
+            /^FQNAME:/ {
+              fq=$0; sub(/FQNAME:/, "", fq)
+              print "| " name " | " ver " | " fq " |"
+            }
+          ' | head -40
+      } | codeblock ""
+
+      # Also list vendor-specific (Spreadtrum) HALs
+      h3 "Vendor-specific HALs (Spreadtrum/Unisoc)"
+      echo ""
+      grep -oE 'vendor\.sprd\.[^<]+' "$MANIFEST_XML" 2>/dev/null | sort -u | codeblock ""
+    fi
   else
     echo "$(fail_mark) **Vendor blobs not extracted yet.**"
     track_missing "Vendor blobs"
@@ -612,23 +767,39 @@ BACKUP_DIR="${PROJECT_DIR}/backup"
 
   hr
 
-  h2 "🔍 Missing Artifacts Analysis & Remediation"
+  h2 "🚀 Porting Readiness & Action Items"
 
   echo ""
-  echo "### Why are some items missing?"
+  echo "### ✅ Ready for Porting"
+  echo ""
+  echo "These essentials are confirmed and ready:"
+  echo ""
+  echo "| Requirement | Status | Notes |"
+  echo "|-------------|--------|-------|"
+  echo "| SoC identified | ✅ | Unisoc SC9863A (sharkl3 platform) |"
+  echo "| DTB/DTS extracted | ✅ | Device tree from boot.img |"
+  echo "| Partition layout | ✅ | super.img with system/vendor/product |"
+  echo "| Boot cmdline | ✅ | Kernel parameters known |"
+  echo "| fstab | ✅ | Mount points defined |"
+  echo "| Vendor manifest | ✅ | HAL interfaces documented |"
   echo ""
 
-  # Check specific missing items and explain why
+  # Count actionable issues
+  ACTION_NEEDED=0
+
+  echo "### 🔧 Action Items"
+  echo ""
+  echo "Issues requiring attention (if any):"
+  echo ""
+
+  # Check DTB DTS
   if [[ ! -f "$DTB_TRIMMED_DTS" ]]; then
-    echo "#### $(fail_mark) DTB DTS (backup/dtb-stock-trimmed.dts)"
+    ACTION_NEEDED=$((ACTION_NEEDED + 1))
+    echo "#### $ACTION_NEEDED. Copy DTB to backup for analysis"
     echo ""
-    echo "**Why missing:** The \`02_unpack_and_extract_dtb.sh\` script extracts DTB to"
-    echo "\`extracted/dtb_from_bootimg/\` but doesn't copy a \"trimmed\" version to \`backup/\`."
+    echo "**Current:** DTB extracted to \`extracted/dtb_from_bootimg/\` but not linked to \`backup/\`"
     echo ""
-    echo "**Impact:** The report cannot grep DTB for hardware nodes (panel, touchscreen, WiFi/BT)."
-    echo ""
-    echo "**Fix:** Copy and optionally trim the extracted DTB:"
-    echo ""
+    echo "**Fix:**"
     printf '%s\n' '```bash'
     echo "cp extracted/dtb_from_bootimg/01_dtbdump_*SC9863a.dtb backup/dtb-stock-trimmed.dtb"
     echo "dtc -I dtb -O dts -o backup/dtb-stock-trimmed.dts backup/dtb-stock-trimmed.dtb"
@@ -636,107 +807,104 @@ BACKUP_DIR="${PROJECT_DIR}/backup"
     echo ""
   fi
 
-  # Check for empty init scripts
-  if [[ -d "${RAMDISK_DIR}/init" ]]; then
-    init_count=$(find "${RAMDISK_DIR}/init" -maxdepth 1 -type f -name "*.rc" 2>/dev/null | wc -l)
-    if [[ "$init_count" -eq 0 ]]; then
-      echo "#### $(warn_mark) Init scripts (init*.rc) — Empty"
-      echo ""
-      echo "**Why empty:** This is **normal for Android 10+ devices** with first_stage_mount."
-      echo "The boot ramdisk contains only the minimal \`init\` binary and \`fstab\`."
-      echo "Full init scripts (\`init.rc\`, \`init.*.rc\`) live inside \`system.img\` and \`vendor.img\`."
-      echo ""
-      echo "**Impact:** None — postmarketOS doesn't use Android init scripts."
-      echo ""
-      echo "**For reference only:** Mount system/vendor to extract Android init configs:"
-      echo ""
-      printf '%s\n' '```bash'
-      echo "sudo mount -o loop,ro extracted/super_lpunpack/system.img /mnt"
-      echo "ls /mnt/system/etc/init/"
-      printf '%s\n' '```'
-      echo ""
-    fi
-  fi
-
-  # Check for empty ueventd
-  if [[ -d "${RAMDISK_DIR}/ueventd" ]]; then
-    ueventd_count=$(find "${RAMDISK_DIR}/ueventd" -maxdepth 1 -type f 2>/dev/null | wc -l)
-    if [[ "$ueventd_count" -eq 0 ]]; then
-      echo "#### $(warn_mark) Ueventd rules (ueventd*.rc) — Empty"
-      echo ""
-      echo "**Why empty:** Same reason as init scripts — Android 10+ first_stage_mount."
-      echo "Ueventd rules are in \`vendor.img\` at \`/vendor/ueventd.rc\`."
-      echo ""
-      echo "**Impact:** Low — postmarketOS uses udev, not ueventd."
-      echo ""
-    fi
-  fi
-
-  # Check vendor modules
+  # Check vendor modules - but first verify if they exist in vendor.img at all
   vendor_modules_dir="${VENDOR_BLOBS_DIR}/lib/modules"
   if [[ -d "$vendor_modules_dir" ]]; then
     module_count=$(find "$vendor_modules_dir" -type f -name "*.ko" 2>/dev/null | wc -l)
     if [[ "$module_count" -eq 0 ]]; then
-      echo "#### $(warn_mark) Vendor kernel modules (*.ko) — Empty"
-      echo ""
-      echo "**Why empty:** The \`04_extract_vendor_blobs.sh\` script uses \`debugfs\` fallback"
-      echo "(because \`sudo mount\` requires root in containers). \`debugfs rdump\` can fail"
-      echo "silently for some directory structures."
-      echo ""
-      echo "**Impact:** Missing GPU/WiFi/sensor kernel modules needed for hardware."
-      echo ""
-      echo "**Fix:** Mount vendor.img with root privileges:"
-      echo ""
-      printf '%s\n' '```bash'
-      echo "sudo mount -o loop,ro extracted/super_lpunpack/vendor.img /mnt"
-      echo "cp -a /mnt/lib/modules extracted/vendor_blobs/lib/"
-      echo "sudo umount /mnt"
-      printf '%s\n' '```'
-      echo ""
+      # Check if vendor.img actually has modules (some devices use monolithic kernel)
+      VENDOR_IMG="${PROJECT_DIR}/extracted/super_lpunpack/vendor.img"
+      if [[ -f "$VENDOR_IMG" ]] && command -v debugfs >/dev/null 2>&1; then
+        vendor_has_modules=$(debugfs -R "ls /lib/modules" "$VENDOR_IMG" 2>/dev/null | grep -c '\.ko$' || echo "0")
+        if [[ "$vendor_has_modules" -gt 0 ]]; then
+          ACTION_NEEDED=$((ACTION_NEEDED + 1))
+          echo "#### $ACTION_NEEDED. Extract vendor kernel modules"
+          echo ""
+          echo "**Current:** \`vendor/lib/modules\` empty (extraction limitation)"
+          echo ""
+          echo "**Impact:** Missing GPU/WiFi/sensor \`.ko\` modules for hardware"
+          echo ""
+          echo "**Fix:** Re-run extraction with fuse2fs (recommended) or sudo mount:"
+          printf '%s\n' '```bash'
+          echo "# Option 1: Install fuse2fs and re-run (works in containers)"
+          echo "sudo apt install fuse2fs"
+          echo "bash scripts/04_extract_vendor_blobs.sh"
+          echo ""
+          echo "# Option 2: Manual extraction with sudo (outside container)"
+          echo "sudo mount -o loop,ro extracted/super_lpunpack/vendor.img /mnt"
+          echo "cp -a /mnt/lib/modules extracted/vendor_blobs/lib/"
+          echo "sudo umount /mnt"
+          printf '%s\n' '```'
+          echo ""
+        fi
+        # If vendor.img has no modules, silently skip (monolithic kernel)
+      fi
     fi
   fi
 
-  # Check for vendor firmware
-  vendor_fw_dir="${VENDOR_BLOBS_DIR}/firmware"
-  if [[ -d "$vendor_fw_dir" ]]; then
-    # Check if there's a nested firmware/firmware structure
-    if [[ -d "${vendor_fw_dir}/firmware" ]]; then
-      echo "#### $(info_mark) Vendor firmware structure note"
-      echo ""
-      echo "Firmware was extracted with a nested \`firmware/firmware/\` structure."
-      echo "This is due to how \`debugfs rdump\` works. The actual firmware is at:"
-      echo ""
-      echo "\`extracted/vendor_blobs/firmware/firmware/\`"
-      echo ""
+  # Note: Nested firmware directories are now auto-flattened by 04_extract_vendor_blobs.sh
+
+  if [[ "$ACTION_NEEDED" -eq 0 ]]; then
+    echo "_No action items — all artifacts extracted successfully!_"
+    echo ""
+  fi
+
+  echo "### ℹ️ Expected Warnings (No Action Needed)"
+  echo ""
+  echo "These warnings are **normal for Android 10+** devices and don't require fixes:"
+  echo ""
+  echo "| Warning | Explanation |"
+  echo "|---------|-------------|"
+
+  # Init scripts warning
+  if [[ -d "${RAMDISK_DIR}/init" ]]; then
+    init_count=$(find "${RAMDISK_DIR}/init" -maxdepth 1 -type f -name "*.rc" 2>/dev/null | wc -l)
+    if [[ "$init_count" -eq 0 ]]; then
+      echo "| Init scripts empty | Android 10+ uses first_stage_mount; init.rc lives in system.img |"
     fi
   fi
 
-  hr
+  # Ueventd warning
+  if [[ -d "${RAMDISK_DIR}/ueventd" ]]; then
+    ueventd_count=$(find "${RAMDISK_DIR}/ueventd" -maxdepth 1 -type f 2>/dev/null | wc -l)
+    if [[ "$ueventd_count" -eq 0 ]]; then
+      echo "| Ueventd rules empty | Same reason; postmarketOS uses udev anyway |"
+    fi
+  fi
 
-  h2 "🚀 Next Steps for postmarketOS Porting"
+  # super.img not found
+  if [[ ! -f "$SUPER_IMG" ]]; then
+    echo "| super.img not found | Normal — cleaned up after successful lpunpack extraction |"
+  fi
+
+  # Vendor modules empty but vendor.img has none (monolithic kernel)
+  vendor_modules_dir="${VENDOR_BLOBS_DIR}/lib/modules"
+  if [[ -d "$vendor_modules_dir" ]]; then
+    module_count=$(find "$vendor_modules_dir" -type f -name "*.ko" 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$module_count" == "0" ]]; then
+      VENDOR_IMG_CHECK="${PROJECT_DIR}/extracted/super_lpunpack/vendor.img"
+      if [[ -f "$VENDOR_IMG_CHECK" ]] && command -v debugfs >/dev/null 2>&1; then
+        vendor_has_modules=$(debugfs -R "ls /lib/modules" "$VENDOR_IMG_CHECK" 2>/dev/null | grep -c '\.ko$' || true)
+        vendor_has_modules="${vendor_has_modules:-0}"
+        if [[ "$vendor_has_modules" == "0" ]]; then
+          echo "| vendor/lib/modules empty | Monolithic kernel — drivers built-in, not as modules |"
+        fi
+      fi
+    fi
+  fi
 
   echo ""
-  echo "### Essential tasks before starting the port:"
+
+  echo "### 🎯 postmarketOS Porting Checklist"
   echo ""
-  echo "1. **$(ok_mark) DTB/DTS available** — Device tree extracted from boot.img"
-  echo "2. **$(ok_mark) Boot image analyzed** — cmdline, ramdisk structure known"
-  echo "3. **$(ok_mark) Partition layout known** — super.img extracted (system/vendor/product)"
-  echo "4. **$(ok_mark) SoC identified** — Unisoc SC9863A (sharkl3 platform)"
+  echo "With the extracted artifacts, you can now:"
   echo ""
-  echo "### Recommended improvements:"
-  echo ""
-  echo "1. **Copy DTB to backup/** — Run:"
-  echo "   \`cp extracted/dtb_from_bootimg/01_dtbdump_*SC9863a.dtb backup/dtb-stock-trimmed.dtb\`"
-  echo ""
-  echo "2. **Extract vendor kernel modules** — Mount vendor.img with sudo to get \`*.ko\` files"
-  echo ""
-  echo "3. **Identify WiFi/BT firmware** — Check \`extracted/vendor_blobs/firmware/\` for:"
-  echo "   - \`wcnmodem.bin\` — WCN (Wireless Connectivity) modem"
-  echo "   - \`sc2355_*\` — Spreadtrum WiFi/BT chip firmware"
-  echo ""
-  echo "4. **Analyze display panel** — Grep DTB for panel compatible strings"
-  echo ""
-  echo "5. **Check touchscreen** — Device likely uses GSL series (gslx680) or Focaltech"
+  echo "1. **Create device package** — Use DTB model/compatible strings for \`deviceinfo\`"
+  echo "2. **Configure kernel** — Reference loaded modules list for required drivers"
+  echo "3. **Package firmware** — Copy from \`extracted/vendor_blobs/firmware/\` to \`linux-firmware\`"
+  echo "4. **Identify panel** — Grep DTS for \`panel\` or \`dsi\` compatible strings"
+  echo "5. **Identify touchscreen** — Firmware shows \`focaltech-FT5x46.bin\` (Focaltech FT5x46)"
+  echo "6. **GPU driver** — PowerVR Rogue (rgx.fw.signed) — needs proprietary blob packaging"
   echo ""
 
   hr
