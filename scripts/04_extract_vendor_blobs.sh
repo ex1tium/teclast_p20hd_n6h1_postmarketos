@@ -48,17 +48,26 @@ copy_if_exists() {
   fi
 }
 
-# Flatten nested directory structure (fixes debugfs rdump quirk)
+# Flatten nested directory structure (fixes debugfs extraction quirk)
+# debugfs can create structures like firmware/firmware/ when dumping directories
 flatten_nested() {
   local dir="$1"
   local basename
   basename=$(basename "$dir")
+
   # Check for nested dir with same name (e.g., firmware/firmware/)
   if [[ -d "${dir}/${basename}" ]]; then
     echo "[*] Flattening nested ${basename}/${basename}/ structure..."
-    # Move contents up one level
-    find "${dir}/${basename}" -maxdepth 1 ! -name "$basename" -exec mv {} "$dir/" \; 2>/dev/null || true
+    # Move all contents (files and subdirs) up one level
+    for item in "${dir}/${basename}"/*; do
+      [[ -e "$item" ]] && mv "$item" "$dir/" 2>/dev/null || true
+    done
+    # Also move hidden files if any
+    for item in "${dir}/${basename}"/.[!.]*; do
+      [[ -e "$item" ]] && mv "$item" "$dir/" 2>/dev/null || true
+    done
     rmdir "${dir}/${basename}" 2>/dev/null || true
+    echo "[*] Flattened: moved contents from ${basename}/${basename}/ to ${basename}/"
   fi
 }
 
@@ -261,22 +270,23 @@ echo "    Firmware files:       $FW_COUNT"
 [[ -f "$OUTDIR/build.prop" && -s "$OUTDIR/build.prop" ]] && echo "    build.prop:           ✓" || echo "    build.prop:           ✗"
 [[ -f "$OUTDIR/etc/vintf/manifest.xml" && -s "$OUTDIR/etc/vintf/manifest.xml" ]] && echo "    manifest.xml:         ✓" || echo "    manifest.xml:         ✗"
 
+# Check if vendor.img actually contains kernel modules
 if [[ "$MODULE_COUNT" -eq 0 ]]; then
-  echo
-  echo "[!] Warning: No kernel modules extracted."
-  echo "    This may be a debugfs limitation or the vendor.img structure."
-  echo ""
-  echo "    Alternative extraction methods to try:"
-  echo ""
-  echo "    1. Install fuse2fs (recommended for containers):"
-  echo "       sudo apt install fuse2fs"
-  echo "       # Then re-run this script"
-  echo ""
-  echo "    2. Run outside container with sudo:"
-  echo "       sudo mount -o loop,ro $VENDOR_RAW /mnt"
-  echo "       sudo cp -a /mnt/lib/modules $OUTDIR/lib/"
-  echo "       sudo chown -R \$(id -u):\$(id -g) $OUTDIR/lib/modules"
-  echo "       sudo umount /mnt"
+  # Check if this is a monolithic kernel (no modules in vendor.img)
+  VENDOR_HAS_MODULES=$(debugfs -R "ls /lib/modules" "$VENDOR_RAW" 2>/dev/null | grep -c '\.ko$' || echo "0")
+  if [[ "$VENDOR_HAS_MODULES" -gt 0 ]]; then
+    echo
+    echo "[!] Note: No kernel modules extracted, but vendor.img contains $VENDOR_HAS_MODULES .ko files."
+    echo "    This is a debugfs extraction limitation."
+    echo ""
+    echo "    To extract modules, install fuse2fs and re-run:"
+    echo "       sudo apt install fuse2fs"
+    echo "       bash scripts/04_extract_vendor_blobs.sh"
+  else
+    echo
+    echo "[*] Note: No kernel modules in vendor.img (monolithic kernel - drivers built into kernel)."
+    echo "    This is normal for this device."
+  fi
 fi
 
 echo

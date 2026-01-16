@@ -75,7 +75,7 @@ git_set_remote_if_needed() {
 }
 
 git_clone_or_update() {
-  local url="$1" dir="$2" branch="${3:-}" name="${4:-repo}"
+  local url="$1" dir="$2" branch="${3:-}" name="${4:-repo}" shallow="${5:-0}"
 
   if [[ "$RECLONE_TOOLS" -eq 1 && -d "$dir" ]]; then
     echo "[*] --reclone-tools: removing $name at $dir"
@@ -86,6 +86,8 @@ git_clone_or_update() {
     echo "[*] Cloning $name..."
     if [[ -n "$branch" ]]; then
       git clone --depth=1 --branch "$branch" "$url" "$dir"
+    elif [[ "$shallow" -eq 1 ]]; then
+      git clone --depth=1 "$url" "$dir"
     else
       git clone "$url" "$dir"
     fi
@@ -310,7 +312,8 @@ python3 -m pip install --user --upgrade "$PMBOOTSTRAP_DIR"
 
 echo ""
 echo "==> Setting up pmaports (postmarketOS ports tree reference)..."
-git_clone_or_update "$PMAPORTS_REPO" "$PMAPORTS_DIR" "" "pmaports"
+# Use shallow clone - pmaports is ~2GB full history, ~200MB shallow
+git_clone_or_update "$PMAPORTS_REPO" "$PMAPORTS_DIR" "" "pmaports" 1
 
 if [[ -d "$PMAPORTS_DIR/.git" ]]; then
   git_set_remote_if_needed "$PMAPORTS_DIR" "origin" "$PMAPORTS_REPO"

@@ -134,16 +134,18 @@ sha256_list() {
   local title="$1"; shift
   h3 "$title"
   local any=0
+  local output=""
   for f in "$@"; do
     if [[ -f "$f" ]]; then
       any=1
-      echo "$(sha256sum "$f")"
+      output+="$(sha256sum "$f")"$'\n'
     fi
   done
   if [[ "$any" -eq 0 ]]; then
     echo "_No files found._"
+  else
+    echo "$output" | codeblock ""
   fi
-  echo "" | codeblock ""
 }
 
 grep_some() {
@@ -523,7 +525,12 @@ SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
     safe_cmd "super.img file type" file "$SUPER_IMG"
     safe_ls "super.img size" "$SUPER_IMG" 120
   else
-    echo "$(warn_mark) **super.img not at default location** (may have been extracted and deleted)"
+    # Check if lpunpack already extracted the partitions
+    if [[ -d "$SUPER_LP_DIR" ]] && [[ $(find "$SUPER_LP_DIR" -maxdepth 1 -name "*.img" 2>/dev/null | wc -l) -gt 0 ]]; then
+      echo "$(info_mark) **super.img not present** (already extracted via lpunpack — this is expected)"
+    else
+      echo "$(warn_mark) **super.img not found** — run \`scripts/03_unpack_super_img.sh\` to extract"
+    fi
     echo ""
   fi
 
@@ -622,16 +629,27 @@ SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
         echo "$(ok_mark) **vendor/lib/modules found ($mod_count .ko files)**"
         track_found "Vendor kernel modules"
       else
-        echo "$(warn_mark) **vendor/lib/modules directory exists but no .ko files**"
-        track_warning "Vendor kernel modules (empty)"
-        echo ""
-        echo "$(info_mark) This often happens with debugfs extraction. Mount vendor.img with sudo:"
-        echo ""
-        printf '%s\n' '```bash'
-        echo "sudo mount -o loop,ro extracted/super_lpunpack/vendor.img /mnt"
-        echo "cp -a /mnt/lib/modules/* extracted/vendor_blobs/lib/modules/"
-        echo "sudo umount /mnt"
-        printf '%s\n' '```'
+        # Check if vendor.img actually has modules (monolithic kernel check)
+        VENDOR_IMG_FOR_CHECK="${PROJECT_DIR}/extracted/super_lpunpack/vendor.img"
+        if [[ -f "$VENDOR_IMG_FOR_CHECK" ]] && command -v debugfs >/dev/null 2>&1; then
+          vendor_ko_count=$(debugfs -R "ls /lib/modules" "$VENDOR_IMG_FOR_CHECK" 2>/dev/null | grep -c '\.ko$' || echo "0")
+          if [[ "$vendor_ko_count" -gt 0 ]]; then
+            echo "$(warn_mark) **vendor/lib/modules exists but empty** (extraction limitation)"
+            track_warning "Vendor kernel modules (extraction limited)"
+            echo ""
+            echo "$(info_mark) vendor.img contains $vendor_ko_count .ko files. Install fuse2fs and re-run extraction:"
+            echo ""
+            printf '%s\n' '```bash'
+            echo "sudo apt install fuse2fs"
+            echo "bash scripts/04_extract_vendor_blobs.sh"
+            printf '%s\n' '```'
+          else
+            echo "$(info_mark) **vendor/lib/modules empty** (monolithic kernel — drivers built into kernel, not as modules)"
+            # Don't track as warning - this is expected for this device
+          fi
+        else
+          echo "$(info_mark) **vendor/lib/modules empty** (likely monolithic kernel)"
+        fi
       fi
     else
       echo "$(fail_mark) **vendor/lib/modules missing**"
@@ -872,9 +890,9 @@ SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
     fi
   fi
 
-  # super.img not found
-  if [[ ! -f "$SUPER_IMG" ]]; then
-    echo "| super.img not found | Normal — cleaned up after successful lpunpack extraction |"
+  # super.img not found (only mention if lpunpack succeeded)
+  if [[ ! -f "$SUPER_IMG" ]] && [[ -d "$SUPER_LP_DIR" ]]; then
+    echo "| super.img not present | Normal — deleted after successful lpunpack extraction |"
   fi
 
   # Vendor modules empty but vendor.img has none (monolithic kernel)
