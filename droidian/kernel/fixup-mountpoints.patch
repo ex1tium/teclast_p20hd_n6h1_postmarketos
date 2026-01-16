@@ -16,38 +16,84 @@
 
     "s9863a1h10"|"teclast_p20hd"|"N6H1")
         sed -i \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/boot mmcblk0p30 ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/system mmcblk0p?? ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/vendor mmcblk0p?? ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/product mmcblk0p?? ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/userdata mmcblk0p?? ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/metadata mmcblk0p?? ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/super mmcblk0p?? ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/vbmeta mmcblk0p?? ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/vbmeta_system mmcblk0p?? ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/vbmeta_vendor mmcblk0p?? ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/dtbo mmcblk0p?? ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/misc mmcblk0p?? ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/cache mmcblk0p?? ' \
-            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/prodnv mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/boot mmcblk0p28 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/recovery mmcblk0p3 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/dtbo mmcblk0p29 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/super mmcblk0p30 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/cache mmcblk0p31 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/userdata mmcblk0p40 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/metadata mmcblk0p36 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/vbmeta mmcblk0p34 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/vbmeta_system mmcblk0p38 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/vbmeta_vendor mmcblk0p39 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/misc mmcblk0p4 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/prodnv mmcblk0p1 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/persist mmcblk0p20 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/socko mmcblk0p32 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/odmko mmcblk0p33 ' \
             "$@"
         ;;
 
 # -----------------------------------------------------------------------------
-# TODO: Get actual partition numbers
+# Partition Layout Reference (Teclast P20HD / N6H1)
 # -----------------------------------------------------------------------------
-# Run on device with ADB to get partition layout:
 #
-#   adb shell ls -la /dev/block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/
+# Partition table from: adb shell ls -la /dev/block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/
 #
-# Or check /proc/partitions:
+# Boot-critical:
+#   boot          -> mmcblk0p28
+#   recovery      -> mmcblk0p3
+#   dtbo          -> mmcblk0p29
+#   misc          -> mmcblk0p4
 #
-#   adb shell cat /proc/partitions
+# Dynamic partitions (system/vendor/product inside super):
+#   super         -> mmcblk0p30
 #
-# Replace the ?? placeholders with actual partition numbers (e.g., mmcblk0p31)
+# Data:
+#   userdata      -> mmcblk0p40
+#   cache         -> mmcblk0p31
+#   metadata      -> mmcblk0p36
 #
-# Example output format you're looking for:
-#   boot -> /dev/block/mmcblk0p30
-#   system -> /dev/block/mmcblk0p44
-#   vendor -> /dev/block/mmcblk0p45
-#   etc.
+# Verified boot:
+#   vbmeta        -> mmcblk0p34
+#   vbmeta_bak    -> mmcblk0p35
+#   vbmeta_system -> mmcblk0p38
+#   vbmeta_vendor -> mmcblk0p39
+#
+# Firmware:
+#   prodnv        -> mmcblk0p1
+#   persist       -> mmcblk0p20
+#   socko         -> mmcblk0p32
+#   odmko         -> mmcblk0p33
+#
+# Bootloader:
+#   uboot         -> mmcblk0p9
+#   uboot_bak     -> mmcblk0p10
+#   uboot_log     -> mmcblk0p11
+#
+# Modem/Radio:
+#   l_modem       -> mmcblk0p21
+#   l_fixnv1      -> mmcblk0p14
+#   l_fixnv2      -> mmcblk0p15
+#   l_runtimenv1  -> mmcblk0p16
+#   l_runtimenv2  -> mmcblk0p17
+#   gnssmodem     -> mmcblk0p18
+#   wcnmodem      -> mmcblk0p19
+#   l_gdsp        -> mmcblk0p23
+#   l_ldsp        -> mmcblk0p24
+#   l_deltanv     -> mmcblk0p22
+#
+# TEE (TrustZone):
+#   trustos       -> mmcblk0p5
+#   trustos_bak   -> mmcblk0p6
+#   sml           -> mmcblk0p7
+#   sml_bak       -> mmcblk0p8
+#   teecfg        -> mmcblk0p26
+#   teecfg_bak    -> mmcblk0p27
+#
+# Other:
+#   miscdata      -> mmcblk0p2
+#   logo          -> mmcblk0p12
+#   fbootlogo     -> mmcblk0p13
+#   pm_sys        -> mmcblk0p25
+#   sysdumpdb     -> mmcblk0p37
