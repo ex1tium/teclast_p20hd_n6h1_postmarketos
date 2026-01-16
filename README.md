@@ -1,28 +1,63 @@
-# Teclast P20HD (N6H1 / Unisoc SC9863A) — postmarketOS Bringup Extraction Workspace
+# Teclast P20HD (N6H1 / Unisoc SC9863A) — Droidian / Linux Bringup Workspace
 
-This repository contains a **bringup extraction and indexing pipeline** for starting a **postmarketOS** device port for the **Teclast P20HD EEA** tablet (**N6H1**, **Unisoc SC9863A / s9863a1h10**).
+This repository contains a **bringup extraction pipeline** and **Droidian porting workspace** for the **Teclast P20HD EEA** tablet (**N6H1**, **Unisoc SC9863A / s9863a1h10**).
 
-The focus is **artifact extraction**, **structured output layout**, and **high-signal bringup reporting** from **official Android firmware**.
+## Current Focus: Droidian
 
-It is not a complete postmarketOS port (yet).
+The project is actively working toward a **Droidian** port (Debian-based mobile Linux using Android HAL via libhybris). The extraction pipeline provides the foundation for kernel building and device adaptation.
+
+| Component | Status |
+|-----------|--------|
+| Bootloader unlock | **Done** (Unisoc signature method) |
+| Boot parameters extracted | **Done** |
+| Device tree extracted | **Done** |
+| Vendor blobs cataloged | **Done** |
+| Droidian adaptation skeleton | **Done** |
+| Kernel source | **Pending** (targeting Samsung A03 Core kernel) |
+| Kernel compilation | **Pending** |
+| First boot test | **Pending** |
+
+See [droidian/PORTING_GUIDE.md](droidian/PORTING_GUIDE.md) for the full porting roadmap.
+
+---
+
+## Why Droidian Instead of postmarketOS?
+
+While the **Unisoc SC9863A** has mainline kernel support (up to ~6.12), **postmarketOS is not viable** for this device due to the **GPU situation**:
+
+| Component | Mainline Status |
+|-----------|-----------------|
+| SoC / CPU | Supported in mainline kernel |
+| **GPU (PowerVR GE8322)** | **No Mesa driver exists** |
+| Display | Potentially workable with mainline DRM |
+| WiFi/BT/Modem | Would require significant work |
+
+The **PowerVR GPU** is the blocker. Without Mesa support, there's no open-source graphics acceleration — the device would be limited to software rendering, making it effectively unusable for any graphical workload.
+
+**Droidian** (or a Treble GSI) sidesteps this by using **libhybris** to run the Android HAL, giving us:
+- Hardware-accelerated GPU via Android's proprietary PowerVR drivers
+- Working display, touch, WiFi, Bluetooth, and modem
+- A full Debian userspace (Phosh/GNOME) on top
+
+This is the pragmatic path to a usable Linux tablet on PowerVR hardware.
 
 ---
 
 ## Purpose
 
-A postmarketOS port typically begins with acquiring reliable, reproducible access to:
+The extraction pipeline acquires reliable, reproducible access to:
 
 - the **kernel + initramfs/ramdisk** (`boot.img`)
 - the **Device Tree** (`DTB (Device Tree Blob)` and `DTBO (Device Tree Blob Overlays)`)
 - the **dynamic partition container** (`super.img`)
 - the **vendor userspace payload** (modules/firmware + `VINTF (Vendor Interface)` metadata)
-- the **AVB (Android Verified Boot)` verification metadata (`vbmeta*.img`)
+- the **AVB (Android Verified Boot)** verification metadata (`vbmeta*.img`)
 
 This repository automates that baseline extraction so bringup work can focus on:
-- `deviceinfo` authoring
-- panel/touch/Wi-Fi/BT bringup
-- kernel/DT alignment
-- init + fstab translation and debugging
+- Kernel compilation with Halium patches
+- Device adaptation packaging
+- Panel/touch/Wi-Fi/BT bringup
+- Init + fstab translation for Droidian
 
 ---
 
@@ -49,7 +84,7 @@ Only the **`.rar`** firmware archive is required.
 .
 ├── LICENSE
 ├── README.md
-├── scripts/
+├── scripts/                          # Extraction pipeline
 │   ├── 00_devtools.sh
 │   ├── 01_extract_firmware.sh
 │   ├── 02_unpack_and_extract_dtb.sh
@@ -61,16 +96,16 @@ Only the **`.rar`** firmware archive is required.
 │   ├── 08_split_dtbo_overlays.sh
 │   ├── 09_extract_ramdisk_init.sh
 │   ├── 11_bringup_report.sh
-│   ├── 12_unlock_bootloader.sh      # Manual only — not in run_all.sh
+│   ├── 12_unlock_bootloader.sh       # Manual only — not in run_all.sh
 │   └── run_all.sh
-└── droidian/                         # Droidian porting workspace
+└── droidian/                         # ← ACTIVE PORTING WORKSPACE
     ├── PORTING_GUIDE.md              # Step-by-step Droidian porting guide
     ├── kernel/
-    │   ├── kernel-info.mk            # Boot parameters for Droidian build
-    │   └── fixup-mountpoints.patch   # Halium partition fixups
+    │   ├── kernel-info.mk            # Boot parameters for Droidian kernel build
+    │   └── fixup-mountpoints.patch   # Halium partition fixups for hybris-boot
     └── adaptation/
-        ├── debian/                   # Debian packaging for adaptation
-        └── sparse/                   # Device-specific system files
+        ├── debian/                   # Debian packaging (control, rules, changelog)
+        └── sparse/                   # Device-specific overlay files
 ```
 
 During execution, the pipeline creates working output folders such as:
@@ -200,8 +235,8 @@ The scripts target a Debian/Ubuntu-style environment and use `apt`.
 * `extract-dtb` Python package
 * `AIK (Android Image Kitchen)` for boot image unpacking
 * `pacextractor` for Spreadtrum/Unisoc `.pac` extraction
-* `pmbootstrap` + `pmaports` (postmarketOS reference toolchain/tree)
 * fallback partition tools (if `lpunpack` is missing system-wide)
+* `pmbootstrap` + `pmaports` (reference toolchain, useful for boot image tools)
 
 ### Manual Tool Installation (if needed)
 
@@ -692,6 +727,7 @@ After successfully unlocking the bootloader:
 
 * Locked production devices may restrict access to certain runtime nodes (e.g. `/proc/cmdline`).
 * This workspace is designed for **repeatable bringup extraction**, not final flashing workflows.
+* The Droidian port is a work-in-progress — see [droidian/PORTING_GUIDE.md](droidian/PORTING_GUIDE.md) for current status.
 
 ---
 
@@ -818,3 +854,4 @@ After a successful run, the extraction layout typically includes:
 * `reports/bringup_report.md`
 * `logs/*.log`
 * `tools/hovatek_fastboot/` — Extracted Hovatek tools (after running `12_unlock_bootloader.sh`)
+* `droidian/` — Droidian porting files (kernel-info.mk, adaptation package skeleton)
