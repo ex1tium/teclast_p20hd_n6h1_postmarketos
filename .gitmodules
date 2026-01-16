@@ -2,3 +2,7 @@
 	path = kernel/linux-teclast-p20hd
 	url = https://github.com/ex1tium/linux-teclast-p20hd.git
 	branch = p20hd
+[submodule "toolchain/gcc-aarch64"]
+	path = toolchain/gcc-aarch64
+	url = https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9
+	branch = lineage-19.1
