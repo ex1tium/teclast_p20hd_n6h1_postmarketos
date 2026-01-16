@@ -21,6 +21,12 @@
 /out/
 /firmware/
 
+# ------------------------------------------------------------------------------
+# EXCEPTIONS: Keep these tracked
+# ------------------------------------------------------------------------------
+# Kernel submodule (this is a git submodule, not cloned tools)
+!/kernel/
+
 # State files from run_all.sh
 /state/
 
